@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#c4302b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="YTダイジェスト">
+  <title>YouTube新着ダイジェスト</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar"><div class="topbar-inner">
+    <h1>YouTube新着ダイジェスト</h1>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-view="feed" aria-selected="true">新着</button>
+      <button role="tab" data-view="channels">チャンネル</button>
+      <button role="tab" data-view="known">既知</button>
+      <button role="tab" data-view="settings">設定</button>
+    </nav>
+  </div></header>
+
+  <main>
+    <!-- 新着 -->
+    <section id="view-feed" class="view">
+      <div id="setup-hint" class="card warn" hidden>
+        はじめに「設定」でGeminiのAPIキーを入れ、「チャンネル」で要約したいチャンネルを選んでください。
+      </div>
+      <div class="actions">
+        <button id="btn-check" class="primary">新着を要約</button>
+        <button id="btn-play-all">未聴をすべて聞く</button>
+      </div>
+      <div class="actions small">
+        <button id="btn-check-only">新着の確認だけ</button>
+        <button id="btn-sum-all">未要約をすべて要約</button>
+      </div>
+      <div class="toolbar-row">
+        <select id="f-channel"><option value="">選択中のチャンネルすべて</option></select>
+        <select id="f-status">
+          <option value="all">スキップ以外すべて</option>
+          <option value="unheard">まだ聞いていないもの</option>
+          <option value="heard">聞いたもの</option>
+          <option value="skipped">スキップしたもの</option>
+        </select>
+      </div>
+      <details class="manual">
+        <summary>動画のURLを貼って要約</summary>
+        <div class="row"><input id="manual-url" type="url" placeholder="https://youtu.be/..." autocomplete="off"><button id="btn-manual">要約</button></div>
+      </details>
+      <p id="progress" class="muted" aria-live="polite"></p>
+      <div id="videos"></div>
+    </section>
+
+    <!-- チャンネル -->
+    <section id="view-channels" class="view" hidden>
+      <div class="card">
+        <h2>チャンネルを追加</h2>
+        <div class="row"><input id="ch-input" placeholder="@ハンドル、URL、チャンネル名" autocomplete="off"><button id="btn-ch-add">追加</button></div>
+        <details>
+          <summary>登録チャンネルをまとめて取り込む</summary>
+          <p class="muted">次のどれか1つで取り込めます（詳しくはREADME）。</p>
+          <ol class="steps">
+            <li><b>Googleでログイン</b>（設定にOAuthクライアントIDが必要）<br><button id="btn-signin">Googleでログインして取り込む</button></li>
+            <li><b>Google TakeoutのCSV</b>（YouTube → subscriptions.csv）<br><input id="takeout-file" type="file" accept=".csv,text/csv"></li>
+            <li><b>公開設定の登録チャンネル</b>（自分のチャンネルIDまたは@ハンドル）<br>
+              <span class="row"><input id="my-channel" placeholder="UC... または @自分のハンドル"><button id="btn-public-subs">取り込む</button></span></li>
+          </ol>
+        </details>
+      </div>
+      <div class="toolbar-row">
+        <input id="ch-q" type="search" placeholder="チャンネルを検索" autocomplete="off">
+      </div>
+      <div class="toolbar-row">
+        <span id="ch-count" class="muted"></span>
+        <button id="btn-ch-all" class="small">すべて選択</button>
+        <button id="btn-ch-none" class="small">すべて解除</button>
+      </div>
+      <ul id="channels" class="list"></ul>
+    </section>
+
+    <!-- 既知 -->
+    <section id="view-known" class="view" hidden>
+      <div class="card">
+        <p class="muted">ここにある内容は「知っていること」として扱われ、要約・読み上げから除かれます。要約した内容は自動で追加されます。</p>
+        <div class="row"><input id="known-input" placeholder="知っていることを追加（例：〇〇は△△年に発売）" autocomplete="off"><button id="btn-known-add">追加</button></div>
+      </div>
+      <div class="toolbar-row">
+        <input id="known-q" type="search" placeholder="検索" autocomplete="off">
+        <span id="known-count" class="muted"></span>
+      </div>
+      <ul id="known" class="list"></ul>
+    </section>
+
+    <!-- 設定 -->
+    <section id="view-settings" class="view" hidden>
+      <form id="settings" class="card form">
+        <h2>API（無料）</h2>
+        <label>Gemini APIキー <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">取得</a>
+          <input name="geminiKey" type="password" autocomplete="off" required></label>
+        <label>YouTube Data APIキー（空欄ならGeminiと同じキー）
+          <input name="ytKey" type="password" autocomplete="off"></label>
+        <label>モデル
+          <span class="row"><input name="model" list="models" autocomplete="off"><button type="button" id="btn-models">一覧</button></span>
+          <datalist id="models"></datalist></label>
+        <label>OAuthクライアントID（Googleログインで取り込むときだけ）
+          <input name="clientId" autocomplete="off"></label>
+
+        <h2>新着の範囲</h2>
+        <label>何日前までの投稿を見るか <input name="days" type="number" min="1" max="30"></label>
+        <label>1チャンネルあたりの最大件数 <input name="perChannel" type="number" min="1" max="20"></label>
+        <label class="check"><input name="skipShorts" type="checkbox"> 3分以下の動画（ショート）を除く</label>
+        <label>動画の解析の細かさ（1秒あたりのコマ数。小さいほど無料枠を節約）
+          <select name="fps"><option value="0.1">0.1（話だけの動画向け）</option><option value="0.2">0.2</option><option value="0.5">0.5</option><option value="1">1（画面の情報も重視）</option></select></label>
+        <label>重複チェックに使う既知の件数（新しい順） <input name="knownLimit" type="number" min="50" max="5000" step="50"></label>
+
+        <h2>読み上げ</h2>
+        <label>声 <select name="voiceURI" id="voice"></select></label>
+        <label>速さ <span id="rate-val"></span><input name="rate" type="range" min="0.6" max="2" step="0.1"></label>
+        <button type="button" id="btn-voice-test">試しに聞く</button>
+
+        <div class="actions"><button class="primary" type="submit">保存</button></div>
+      </form>
+      <div class="card">
+        <h2>データ</h2>
+        <p class="muted">データはこのiPhoneのブラウザの中だけに保存されます（APIキーはバックアップに含まれません）。</p>
+        <div class="actions">
+          <button id="btn-export">バックアップを保存</button>
+          <label class="button">復元<input id="import-file" type="file" accept="application/json,.json" hidden></label>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="player" class="player" hidden>
+    <div class="player-label" id="player-label"></div>
+    <button id="pl-pause" aria-label="一時停止">⏸</button>
+    <button id="pl-skip" aria-label="次へ">⏭</button>
+    <button id="pl-stop" aria-label="停止">⏹</button>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
