@@ -11,10 +11,12 @@ let settings = { ...store.DEFAULT_SETTINGS, ...store.load('settings', {}) };
 let channels = store.load('channels', []);   // [{id, title, thumb, selected}]
 let videos = store.load('videos', {});       // {videoId: {...}}
 let known = store.load('known', []);         // [{id, text, src, at}]
+let deleted = store.load('deleted', {});     // {videoId: deletedAt} so deleted videos are not fetched again
 
 const saveChannels = () => store.save('channels', channels);
 const saveVideos = () => { if (!store.save('videos', videos)) toast('保存できませんでした（容量不足）。古い動画を削除してください'); };
 const saveKnown = () => store.save('known', known);
+const saveDeleted = () => store.save('deleted', deleted);
 
 const ytKey = () => settings.ytKey || settings.geminiKey;
 const working = new Set();   // video IDs being summarised / explained right now
@@ -150,7 +152,7 @@ async function checkNew() {
     await Promise.all(sel.slice(i, i + 6).map(async c => {
       try {
         const ups = await YT.latestUploads(c.id, settings.perChannel, ytKey());
-        for (const u of ups) if (new Date(u.publishedAt) >= since && !videos[u.id]) found.push({ ...u, channelId: c.id, channelTitle: c.title });
+        for (const u of ups) if (new Date(u.publishedAt) >= since && !videos[u.id] && !deleted[u.id]) found.push({ ...u, channelId: c.id, channelTitle: c.title });
       } catch (e) { if (e.status === 403) throw e; failed++; }
       progress(`新着を確認中… ${++done} / ${sel.length}`);
     }));
@@ -179,6 +181,8 @@ function prune() {
   list.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
   list = list.slice(0, 400);
   videos = Object.fromEntries(list.map(v => [v.id, v]));
+  for (const [id, t] of Object.entries(deleted)) if (t < old) delete deleted[id];
+  saveDeleted();
 }
 
 // ---- summarise -----------------------------------------------------------
@@ -237,6 +241,7 @@ $('#btn-manual').addEventListener('click', async () => {
   if (!id) return toast('YouTubeのURLを入れてください');
   if (needKey('yt')) return;
   try {
+    if (deleted[id]) { delete deleted[id]; saveDeleted(); }
     if (!videos[id]) {
       const d = (await YT.videoDetails([id], ytKey()))[id];
       if (!d) return toast('動画が見つかりませんでした');
@@ -262,15 +267,87 @@ function visibleVideos(anyStatus = false) {
     .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 }
 
+// ---- grouping by posting day ----
+const pad = n => String(n).padStart(2, '0');
+const dayKey = iso => { const d = new Date(iso); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+function dayLabel(key) {
+  const d = new Date(key + 'T00:00:00');
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - d) / 86400e3);
+  const base = `${d.getMonth() + 1}月${d.getDate()}日（${'日月火水木金土'[d.getDay()]}）`;
+  return diff === 0 ? `今日 ${base}` : diff === 1 ? `昨日 ${base}` : base;
+}
+function groupByDay(list) {
+  const m = new Map();
+  for (const v of list) { const k = dayKey(v.publishedAt); if (!m.has(k)) m.set(k, []); m.get(k).push(v); }
+  return m; // insertion order = newest day first (list is sorted newest first)
+}
+/** All videos of a day in the current channel scope, whatever their status. */
+const dayVideos = key => visibleVideos(true).filter(v => dayKey(v.publishedAt) === key);
+function dayCounts(key) {
+  const vs = visibleVideos().filter(v => dayKey(v.publishedAt) === key);
+  const unheard = vs.filter(v => v.status === 'done' && !v.heard).length;
+  const pending = vs.filter(v => v.status === 'new' || v.status === 'error').length;
+  return `${vs.length}本` + (unheard ? `・未聴${unheard}` : '') + (pending ? `・未要約${pending}` : '');
+}
+const dayOpen = new Map(); // day key → open?
+
 function renderFeed() {
   $('#setup-hint').hidden = !!(settings.geminiKey && channels.some(c => c.selected));
-  const list = visibleVideos();
-  $('#videos').innerHTML = list.map(cardHtml).join('') ||
-    '<p class="muted empty">表示する動画はありません。「新着を要約」を押してください。</p>';
+  const groups = groupByDay(visibleVideos());
+  $('#videos').innerHTML = [...groups].map(([key, vs]) => {
+    const open = dayOpen.has(key) ? dayOpen.get(key) : vs.some(v => !v.heard);
+    return `
+    <section class="day" data-day="${key}">
+      <details class="day-box" ${open ? 'open' : ''}>
+        <summary class="day-head"><b>${dayLabel(key)}</b> <span class="day-count muted small">${dayCounts(key)}</span></summary>
+        <div class="row-btns day-btns">
+          <button class="small primary" data-act="day-play">▶ この日をまとめて聞く</button>
+          <button class="small" data-act="day-sum">この日を要約</button>
+          <button class="small danger" data-act="day-del">この日を削除</button>
+        </div>
+        ${vs.map(cardHtml).join('')}
+      </details>
+    </section>`;
+  }).join('') || '<p class="muted empty">表示する動画はありません。「新着を要約」を押してください。</p>';
 }
 function renderCard(id) {
   const el = document.querySelector(`.video[data-id="${CSS.escape(id)}"]`);
   if (el && videos[id]) el.outerHTML = cardHtml(videos[id]);
+  const day = videos[id] && dayKey(videos[id].publishedAt);
+  const c = day && document.querySelector(`.day[data-day="${day}"] .day-count`);
+  if (c) c.textContent = dayCounts(day);
+}
+
+function playVideos(list, intro) {
+  TTS.play([
+    { label: '案内', text: intro },
+    ...list.map(v => ({ label: v.title, text: videoSpeech(v), onDone: () => markHeard(v.id) })),
+  ]);
+}
+function dayAction(act, key) {
+  const vs = dayVideos(key).filter(v => v.status !== 'skipped');
+  const label = dayLabel(key).replace(/^(今日|昨日) /, '');
+  if (act === 'day-play') {
+    const done = vs.filter(v => v.status === 'done').reverse(); // oldest first
+    if (!done.length) return toast('この日の要約はまだありません');
+    const unheard = done.filter(v => !v.heard);
+    const list = unheard.length ? unheard : done;
+    playVideos(list, `${label}に投稿された動画、${list.length}本の要約です。`);
+  } else if (act === 'day-sum') {
+    const ids = vs.filter(v => v.status === 'new' || v.status === 'error').map(v => v.id).reverse();
+    if (!ids.length) return toast('この日に未要約の動画はありません');
+    summarizeMany(ids);
+  } else if (act === 'day-del') {
+    const all = dayVideos(key).filter(v => !working.has(v.id));
+    if (!all.length) return;
+    if (!confirm(`${label}の動画 ${all.length} 本の要約を削除しますか？\n（「既知」の記録は残るので、同じ内容は今後も省かれます）`)) return;
+    const now = Date.now();
+    for (const v of all) { deleted[v.id] = now; delete videos[v.id]; openState.delete(v.id); }
+    dayOpen.delete(key);
+    saveVideos(); saveDeleted(); renderFeed();
+    toast(`${label}の要約を削除しました`);
+  }
 }
 
 const openState = new Map(); // video id → details open?
@@ -365,6 +442,7 @@ async function deepDive(v, { pi, q, label, withVideo }) {
 
 $('#videos').addEventListener('click', e => {
   const btn = e.target.closest('button[data-act]'); if (!btn) return;
+  if (btn.dataset.act.startsWith('day-')) return dayAction(btn.dataset.act, btn.closest('.day').dataset.day);
   const card = btn.closest('.video'); const v = videos[card?.dataset.id]; if (!v) return;
   const act = btn.dataset.act, i = +btn.dataset.i;
   const p = v.summary?.points[i];
@@ -393,6 +471,7 @@ $('#videos').addEventListener('keydown', e => {
 });
 $('#videos').addEventListener('toggle', e => {
   const card = e.target.closest?.('.video'); if (card && e.target.matches('.v-body')) openState.set(card.dataset.id, e.target.open);
+  if (e.target.matches?.('.day-box')) dayOpen.set(e.target.closest('.day').dataset.day, e.target.open);
 }, true);
 $('#f-channel').addEventListener('change', renderFeed);
 $('#f-status').addEventListener('change', renderFeed);
@@ -400,10 +479,7 @@ $('#f-status').addEventListener('change', renderFeed);
 $('#btn-play-all').addEventListener('click', () => {
   const list = visibleVideos().filter(v => v.status === 'done' && !v.heard).reverse(); // oldest first
   if (!list.length) return toast('未聴の要約はありません');
-  TTS.play([
-    { label: '案内', text: `未聴の要約が${list.length}件あります。` },
-    ...list.map(v => ({ label: v.title, text: videoSpeech(v), onDone: () => markHeard(v.id) })),
-  ]);
+  playVideos(list, `未聴の要約が${list.length}件あります。`);
 });
 
 // ---- player bar ---------------------------------------------------------------

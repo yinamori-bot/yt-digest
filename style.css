@@ -135,3 +135,10 @@ details.manual { margin-bottom: 8px; }
   padding: 10px 14px; border-radius: 10px; font-size: 14px;
 }
 .toast[hidden] { display: none; }
+
+/* day groups */
+.day { margin-bottom: 14px; }
+.day-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 2px; color: var(--text); font-size: 17px; }
+.day-head .day-count { margin-left: auto; }
+.day-btns { margin: 0 0 10px; }
+button.danger { color: var(--new-fg); border-color: var(--new-fg); }
