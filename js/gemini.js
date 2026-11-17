@@ -49,26 +49,36 @@ const SYSTEM = `あなたは、ユーザーが音声で聞くためのYouTube動
 const SUMMARY_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    headline: { type: 'STRING', description: 'この動画で新しく分かることを一文で。新情報が無ければその旨' },
-    points: {
+    overview: { type: 'STRING', description: '動画全体の要約。新しい情報を中心に2〜4文。新情報が無ければその旨を1文で' },
+    topics: {
       type: 'ARRAY',
-      description: 'ユーザーにとって新しい情報・独自の視点だけ。重要な順',
+      description: '動画の新しい情報を、内容の方向ごとに3〜5個の話題に分けたもの。動画の流れの順',
       items: {
         type: 'OBJECT',
         properties: {
-          title: { type: 'STRING', description: '10〜20字の見出し' },
-          text: { type: 'STRING', description: '1〜3文の説明（読み上げ用）' },
-          time: { type: 'STRING', description: '動画内の位置 例 12:34' },
+          title: { type: 'STRING', description: '話題の見出し（10〜20字）' },
+          summary: { type: 'STRING', description: 'その話題の要約（2〜3文、読み上げ用）' },
+          detail: { type: 'STRING', description: 'その話題の詳しい解説（400〜700字、読み上げ用）。理由・具体例・数字・話し手の意見を含める' },
+          time: { type: 'STRING', description: '動画内で話題が始まる位置 例 12:34' },
         },
-        required: ['title', 'text'],
+        required: ['title', 'summary', 'detail'],
       },
     },
     skipped: { type: 'ARRAY', description: '既知リストと重複したため省いた内容（各15字程度）', items: { type: 'STRING' } },
     facts: { type: 'ARRAY', description: '今回の新しい情報を、後で重複判定に使う短い1文ずつに（固有名詞・数字を含める）', items: { type: 'STRING' } },
     notes: { type: 'STRING', description: '後で深掘りに使う、動画全体の詳しいノート。章ごとにタイムスタンプ付き。既知の内容も含めて4000字程度まで' },
   },
-  required: ['headline', 'points', 'skipped', 'facts', 'notes'],
+  required: ['overview', 'topics', 'skipped', 'facts', 'notes'],
 };
+
+/** Older saved summaries used {headline, points}; convert them to {overview, topics}. */
+export function normalize(s) {
+  if (!s) return s;
+  if (!s.topics) s.topics = (s.points || []).map(p => ({ title: p.title, summary: p.text, detail: '', time: p.time }));
+  if (s.overview == null) s.overview = s.headline || '';
+  s.skipped ||= []; s.facts ||= []; s.notes ||= '';
+  return s;
+}
 
 function knownBlock(known) {
   if (!known.length) return '（まだありません）';
@@ -84,15 +94,15 @@ export async function summarize({ key, model, fps, video, known }) {
 ${knownBlock(known)}
 
 【ルール】
-・動画の中から「新しい情報」と「この動画ならではの視点・意見・具体例」だけを points に入れる。
-・既知リストと同じ内容は points に入れず、skipped に短く書く。既知の話題でも新しい数字・事実・切り口があれば、その新しい部分だけを書く。
+・扱うのは「新しい情報」と「この動画ならではの視点・意見・具体例」だけ。
+・既知リストと同じ内容は入れず、skipped に短く書く。既知の話題でも新しい数字・事実・切り口があれば、その新しい部分だけを書く。
 ・あいさつ、自己紹介、チャンネル登録のお願い、スポンサー紹介、雑談は無視する。
-・points は多くても8つ。新しい情報が無ければ空の配列にする。
+・overview は動画全体の要約。
+・topics は、新しい情報を内容の方向（論点・テーマ）ごとに3〜5個に分ける。話題同士は重ならないようにする。新しい情報が少ない短い動画なら1〜2個でもよく、新しい情報が無ければ空の配列にする。
+・各話題の summary は要点だけ、detail はその話題を詳しく知りたい人向けの解説にする。summary と同じ文を detail で繰り返さない。
 ・notes には、後で質問に答えられるよう動画全体を詳しく記録する（これは読み上げない）。`;
   const text = await callSafe({ key, model, system: SYSTEM, schema: SUMMARY_SCHEMA, contents: [{ role: 'user', parts: [vp, { text: prompt }] }] }, vp);
-  const out = JSON.parse(text);
-  out.points ||= []; out.skipped ||= []; out.facts ||= []; out.notes ||= '';
-  return out;
+  return normalize(JSON.parse(text));
 }
 
 /** Detailed explanation of one point or a free question. withVideo = re-watch the video (slower, more tokens). */
@@ -100,8 +110,8 @@ export async function explain({ key, model, fps, video, summary, history, questi
   const ctx = `動画「${video.title}」（チャンネル：${video.channelTitle || '不明'}）について、ユーザーが詳しく知りたがっています。
 
 【要約】
-${summary.headline}
-${summary.points.map((p, i) => `${i + 1}. ${p.title}：${p.text}`).join('\n')}
+${summary.overview}
+${summary.topics.map((t, i) => `話題${i + 1}. ${t.title}：${t.summary}`).join('\n')}
 
 【動画の詳細ノート】
 ${summary.notes || '（なし）'}

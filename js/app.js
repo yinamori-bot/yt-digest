@@ -351,6 +351,7 @@ function dayAction(act, key) {
 }
 
 const openState = new Map(); // video id → details open?
+const detailOpen = new Set(); // "videoId:topicIndex" whose detailed text is shown
 function cardHtml(v) {
   const s = v.summary, w = working.has(v.id);
   const badge = w ? '<span class="badge busy">処理中…</span>'
@@ -361,19 +362,24 @@ function cardHtml(v) {
   const open = openState.has(v.id) ? openState.get(v.id) : !v.heard;
   let body = '';
   if (s) {
-    const pts = s.points.map((p, i) => `
-      <li class="point">
-        <div class="pt-head"><b>${esc(p.title)}</b>${p.time ? ` <a class="time" href="https://www.youtube.com/watch?v=${esc(v.id)}&t=${tsec(p.time)}" target="_blank" rel="noopener">${esc(p.time)}</a>` : ''}</div>
-        <p>${esc(p.text)}</p>
+    AI.normalize(s);
+    const tps = s.topics.map((t, i) => `
+      <li class="topic">
+        <div class="pt-head"><b>${esc(t.title)}</b>${t.time ? ` <a class="time" href="https://www.youtube.com/watch?v=${esc(v.id)}&t=${tsec(t.time)}" target="_blank" rel="noopener">${esc(t.time)}</a>` : ''}</div>
+        <p>${esc(t.summary)}</p>
         <div class="row-btns">
-          <button class="small" data-act="read-pt" data-i="${i}">▶ 聞く</button>
-          <button class="small" data-act="deep" data-i="${i}" ${w ? 'disabled' : ''}>詳しく</button>
+          <button class="small" data-act="read-topic" data-i="${i}">▶ 聞く</button>
+          <button class="small primary-ghost" data-act="detail" data-i="${i}" ${!t.detail && w ? 'disabled' : ''}>▶ 詳しく聞く</button>
         </div>
+        ${t.detail ? `<details class="topic-detail" data-i="${i}" ${detailOpen.has(v.id + ':' + i) ? 'open' : ''}><summary>詳しい内容</summary>
+          <p>${esc(t.detail).replace(/\n/g, '<br>')}</p>
+          <div class="row-btns"><button class="small" data-act="deeper-topic" data-i="${i}" ${w ? 'disabled' : ''}>さらに詳しく</button></div>
+        </details>` : ''}
         ${deepHtml(v, i, w)}
       </li>`).join('');
     body = `
-      <p class="headline">${esc(s.headline)}</p>
-      ${s.points.length ? `<ol class="points">${pts}</ol>` : '<p class="muted">新しい情報はありませんでした。</p>'}
+      <div class="overview"><div class="muted small">全体の要約</div><p>${esc(s.overview)}</p></div>
+      ${s.topics.length ? `<div class="muted small">話題（${s.topics.length}）</div><ol class="topics">${tps}</ol>` : '<p class="muted">新しい情報はありませんでした。</p>'}
       ${s.skipped.length ? `<details class="skipped"><summary>既知のため省いた内容 ${s.skipped.length} 件</summary><ul>${s.skipped.map(t => `<li>${esc(t)}</li>`).join('')}</ul></details>` : ''}
       ${deepHtml(v, -1, w)}
       <div class="ask row"><input placeholder="この動画について質問（音声入力も可）" data-ask><button class="small" data-act="ask" ${w ? 'disabled' : ''}>質問</button></div>`;
@@ -415,23 +421,29 @@ function deepHtml(v, i, w) {
 const tsec = t => String(t).split(':').reduce((a, b) => a * 60 + (+b || 0), 0);
 
 function videoSpeech(v) {
-  const s = v.summary;
+  const s = AI.normalize(v.summary);
   let t = `${v.channelTitle}の動画、${v.title}。\n`;
-  if (!s.points.length) return t + '新しい情報はありませんでした。' + (s.skipped.length ? `すでに知っている内容が${s.skipped.length}件ありました。` : '');
-  t += s.headline + '\n';
-  s.points.forEach((p, i) => { t += `${i + 1}つ目、${p.title}。${p.text}\n`; });
+  if (!s.topics.length) return t + (s.overview ? s.overview + '\n' : '新しい情報はありませんでした。') + (s.skipped.length ? `すでに知っている内容が${s.skipped.length}件ありました。` : '');
+  t += `全体の要約です。${s.overview}\n話題は${s.topics.length}つです。\n`;
+  s.topics.forEach((p, i) => { t += `${i + 1}つ目、${p.title}。${p.summary}\n`; });
   return t;
 }
 function markHeard(id) {
   const v = videos[id]; if (!v || v.heard) return;
-  v.heard = true; openState.delete(id); saveVideos(); renderCard(id);
+  v.heard = true;
+  if (!openState.has(id)) openState.set(id, true); // keep it open so "詳しく聞く" stays at hand
+  saveVideos(); renderCard(id);
 }
 
 async function deepDive(v, { pi, q, label, withVideo }) {
   if (needKey() || working.has(v.id)) return;
   working.add(v.id); renderCard(v.id);
   try {
-    const history = (v.deep || []).filter(d => d.pi === pi);
+    const t = pi >= 0 ? AI.normalize(v.summary).topics[pi] : null;
+    const history = [
+      ...(t?.detail ? [{ q: `「${t.title}」を詳しく`, a: t.detail }] : []),
+      ...(v.deep || []).filter(d => d.pi === pi),
+    ];
     const a = await AI.explain({ key: settings.geminiKey, model: settings.model, fps: +settings.fps, video: v, summary: v.summary, history, question: q, withVideo });
     const d = { id: uid(), pi, q, label, a, withVideo: !!withVideo, at: Date.now() };
     (v.deep ||= []).push(d); saveVideos();
@@ -445,7 +457,7 @@ $('#videos').addEventListener('click', e => {
   if (btn.dataset.act.startsWith('day-')) return dayAction(btn.dataset.act, btn.closest('.day').dataset.day);
   const card = btn.closest('.video'); const v = videos[card?.dataset.id]; if (!v) return;
   const act = btn.dataset.act, i = +btn.dataset.i;
-  const p = v.summary?.points[i];
+  const p = v.summary ? AI.normalize(v.summary).topics[i] : null;
   const d = (v.deep || []).find(x => x.id === btn.closest('.deep-item')?.dataset.did);
   switch (act) {
     case 'sum': case 'resum': summarizeMany([v.id]); break;
@@ -453,8 +465,15 @@ $('#videos').addEventListener('click', e => {
     case 'unskip': v.status = v.summary ? 'done' : 'new'; saveVideos(); renderFeed(); break;
     case 'heard': v.heard = !v.heard; openState.delete(v.id); saveVideos(); renderCard(v.id); break;
     case 'read': TTS.play([{ label: v.title, text: videoSpeech(v), onDone: () => markHeard(v.id) }]); break;
-    case 'read-pt': TTS.play([{ label: p.title, text: `${p.title}。${p.text}` }]); break;
-    case 'deep': deepDive(v, { pi: i, label: `「${p.title}」を詳しく`, q: `「${p.title}」について、もっと詳しく知りたい。要約では「${p.text}」と説明されている。` }); break;
+    case 'read-topic': TTS.play([{ label: p.title, text: `${p.title}。${p.summary}` }]); break;
+    case 'detail':
+      if (p.detail) {
+        detailOpen.add(v.id + ':' + i);
+        card.querySelector(`.topic-detail[data-i="${i}"]`)?.setAttribute('open', '');
+        TTS.play([{ label: `詳しく：${p.title}`, text: `${p.title}について、詳しく説明します。\n${p.detail}` }]);
+      } else deepDive(v, { pi: i, label: `「${p.title}」を詳しく`, q: `「${p.title}」について、もっと詳しく知りたい。要約では「${p.summary}」と説明されている。` });
+      break;
+    case 'deeper-topic': deepDive(v, { pi: i, label: 'さらに詳しく', q: `「${p.title}」について、すでに説明した内容よりさらに掘り下げて、詳しく説明してほしい。` }); break;
     case 'read-deep': TTS.play([{ label: d.label || d.q, text: d.a }]); break;
     case 'deeper': deepDive(v, { pi: d.pi, label: 'さらに詳しく', q: `直前の説明「${d.a.slice(0, 200)}…」の内容を、さらに掘り下げて詳しく説明してほしい。` }); break;
     case 'deep-video': deepDive(v, { pi: d.pi, label: (d.label || '回答') + '（動画で確認）', q: d.q, withVideo: true }); break;
@@ -471,6 +490,10 @@ $('#videos').addEventListener('keydown', e => {
 });
 $('#videos').addEventListener('toggle', e => {
   const card = e.target.closest?.('.video'); if (card && e.target.matches('.v-body')) openState.set(card.dataset.id, e.target.open);
+  if (e.target.matches?.('.topic-detail') && card) {
+    const k = card.dataset.id + ':' + e.target.dataset.i;
+    e.target.open ? detailOpen.add(k) : detailOpen.delete(k);
+  }
   if (e.target.matches?.('.day-box')) dayOpen.set(e.target.closest('.day').dataset.day, e.target.open);
 }, true);
 $('#f-channel').addEventListener('change', renderFeed);

@@ -142,3 +142,13 @@ details.manual { margin-bottom: 8px; }
 .day-head .day-count { margin-left: auto; }
 .day-btns { margin: 0 0 10px; }
 button.danger { color: var(--new-fg); border-color: var(--new-fg); }
+
+/* overview & topics */
+.overview { background: var(--deep-bg); border-radius: 10px; padding: 8px 12px; margin: 8px 0 12px; }
+.overview p { margin: 2px 0; font-weight: 600; }
+.topics { padding-left: 22px; margin: 6px 0; }
+.topic { margin-bottom: 16px; }
+.topic p { margin: 2px 0; }
+.topic-detail { margin-top: 6px; border-left: 3px solid var(--accent); padding-left: 10px; }
+.topic-detail p { font-size: 15px; }
+button.primary-ghost { color: var(--accent); border-color: var(--accent); font-weight: 600; }
