@@ -227,14 +227,65 @@ async function summarizeMany(ids) {
 function setBusyUI() {
   $('#btn-sum-all').textContent = busy ? '要約を止める' : '未要約をすべて要約';
   $('#btn-check').disabled = busy;
+  updateWakeLock();
 }
 
 const pendingIds = () => visibleVideos(true).filter(v => v.status === 'new' || v.status === 'error').map(v => v.id).reverse(); // oldest first
 
-$('#btn-check').addEventListener('click', async () => {
+async function checkAndSummarize() {
   try { await checkNew(); await summarizeMany(pendingIds()); }
   catch (e) { toast(e.message, 6000); progress(''); }
-});
+}
+$('#btn-check').addEventListener('click', checkAndSummarize);
+
+// ---- scheduled runs (only while the app is open and visible) ----
+const pad2 = n => String(n).padStart(2, '0');
+const schedTimes = () => [settings.sched1, settings.sched2, settings.sched3].filter(t => /^\d{1,2}:\d{2}$/.test(t || ''));
+function slotAt(t, dayOffset) {
+  const [h, m] = t.split(':').map(Number);
+  const d = new Date(); d.setDate(d.getDate() + dayOffset); d.setHours(h, m, 0, 0); return d;
+}
+function lastDueSlot(now = new Date()) {
+  let best = null;
+  for (const t of schedTimes()) for (const off of [0, -1]) { const d = slotAt(t, off); if (d <= now && (!best || d > best)) best = d; }
+  return best;
+}
+function nextSlot(now = new Date()) {
+  let best = null;
+  for (const t of schedTimes()) for (const off of [0, 1]) { const d = slotAt(t, off); if (d > now && (!best || d < best)) best = d; }
+  return best;
+}
+let lastAutoRun = store.load('lastAutoRun', 0);
+function renderSchedInfo() {
+  const n = nextSlot(), el = $('#sched-info');
+  el.hidden = !n;
+  if (n) el.textContent = `⏰ 次の予約：${n.toDateString() === new Date().toDateString() ? '今日' : '明日'} ${n.getHours()}:${pad2(n.getMinutes())}（アプリを開いたまま、画面をつけておいてください）`;
+}
+async function checkSchedule() {
+  renderSchedInfo();
+  if (busy || document.hidden || !settings.geminiKey) return;
+  const due = lastDueSlot();
+  if (!due || due.getTime() <= lastAutoRun) return;
+  lastAutoRun = Date.now(); store.save('lastAutoRun', lastAutoRun);
+  showView('feed');
+  toast('予約の時刻になったので、新着の要約を始めます', 4000);
+  await checkAndSummarize();
+  renderSchedInfo();
+}
+
+// Screen Wake Lock: keep the screen on while waiting for a schedule or summarising.
+let wakeLock = null;
+async function updateWakeLock() {
+  const want = !document.hidden && settings.keepAwake && (busy || schedTimes().length > 0);
+  try {
+    if (want && !wakeLock && navigator.wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!want && wakeLock) { const w = wakeLock; wakeLock = null; await w.release(); }
+  } catch { wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => { updateWakeLock(); if (!document.hidden) checkSchedule(); });
+setInterval(checkSchedule, 20000);
 $('#btn-check-only').addEventListener('click', async () => { try { await checkNew(); } catch (e) { toast(e.message, 6000); progress(''); } });
 $('#btn-sum-all').addEventListener('click', () => summarizeMany(pendingIds()));
 $('#btn-manual').addEventListener('click', async () => {
@@ -564,12 +615,17 @@ form.rate.addEventListener('input', () => { $('#rate-val').textContent = form.ra
 form.addEventListener('submit', e => {
   e.preventDefault();
   const n = (name, min, max) => Math.min(max, Math.max(min, +form[name].value || store.DEFAULT_SETTINGS[name]));
+  const oldSched = schedTimes().join();
   Object.assign(settings, {
     geminiKey: form.geminiKey.value.trim(), ytKey: form.ytKey.value.trim(), clientId: form.clientId.value.trim(),
     model: form.model.value.trim() || store.DEFAULT_SETTINGS.model,
     days: n('days', 1, 30), perChannel: n('perChannel', 1, 20), skipShorts: form.skipShorts.checked,
     fps: +form.fps.value, knownLimit: n('knownLimit', 50, 5000), rate: +form.rate.value, voiceURI: form.voiceURI.value,
+    sched1: form.sched1.value, sched2: form.sched2.value, sched3: form.sched3.value, keepAwake: form.keepAwake.checked,
   });
+  // New schedule: start counting from now, so a time that already passed today does not fire at once.
+  if (schedTimes().join() !== oldSched) { lastAutoRun = Date.now(); store.save('lastAutoRun', lastAutoRun); }
+  renderSchedInfo(); updateWakeLock();
   store.save('settings', settings); TTS.configure(settings);
   if (settings.clientId) YT.preloadSignIn();
   fillSettings(); toast('保存しました');
@@ -624,3 +680,5 @@ try { startView = localStorage.getItem('ytd-view') || 'feed'; } catch {}
 showView(settings.geminiKey ? startView : 'settings');
 if (settings.clientId) YT.preloadSignIn();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+updateWakeLock();
+checkSchedule(); // a time that passed while the app was closed runs now

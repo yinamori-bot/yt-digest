@@ -21,6 +21,8 @@ export const DEFAULT_SETTINGS = {
   rate: 1.1,
   voiceURI: '',
   knownLimit: 600,    // newest N known facts sent with each request
+  sched1: '', sched2: '', sched3: '', // scheduled times "HH:MM" (empty = off)
+  keepAwake: true,    // keep the screen on while waiting for a schedule / summarising
 };
 
 export function exportAll() {

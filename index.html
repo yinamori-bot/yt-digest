@@ -50,6 +50,7 @@
         <summary>動画のURLを貼って要約</summary>
         <div class="row"><input id="manual-url" type="url" placeholder="https://youtu.be/..." autocomplete="off"><button id="btn-manual">要約</button></div>
       </details>
+      <p id="sched-info" class="muted small" hidden></p>
       <p id="progress" class="muted" aria-live="polite"></p>
       <div id="videos"></div>
     </section>
@@ -115,6 +116,13 @@
         <label>動画の解析の細かさ（1秒あたりのコマ数。小さいほど無料枠を節約）
           <select name="fps"><option value="0.1">0.1（話だけの動画向け）</option><option value="0.2">0.2</option><option value="0.5">0.5</option><option value="1">1（画面の情報も重視）</option></select></label>
         <label>重複チェックに使う既知の件数（新しい順） <input name="knownLimit" type="number" min="50" max="5000" step="50"></label>
+
+        <h2>要約の予約</h2>
+        <p class="muted small">設定した時刻に、新着の確認と要約を自動で行います。動くのは、このアプリを開いて画面がついている間だけです（例：寝る前に充電しながら開いておく）。時刻を過ぎてから開いたときは、開いた時点で始めます。</p>
+        <label>予約時刻1 <input name="sched1" type="time"></label>
+        <label>予約時刻2 <input name="sched2" type="time"></label>
+        <label>予約時刻3 <input name="sched3" type="time"></label>
+        <label class="check"><input name="keepAwake" type="checkbox"> 予約を待っている間と要約中は、画面を自動で消さない</label>
 
         <h2>読み上げ</h2>
         <label>声 <select name="voiceURI" id="voice"></select></label>
