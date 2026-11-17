@@ -1,17 +1,20 @@
-// Text-to-speech with the iPhone's built-in voices (free, offline).
-// iOS stops long utterances midway, so text is split into sentences and spoken one by one.
+// Player. Each item is played from a saved audio file (made with Gemini TTS) when one exists —
+// that plays like music: it works in silent mode and keeps going with the screen off.
+// Otherwise it falls back to the iPhone's built-in voice (muted in silent mode).
+// iOS stops long utterances midway, so built-in speech is split into sentences and spoken one by one.
 const synth = window.speechSynthesis;
-let queue = [];       // [{ label, chunks: [string], onDone }]
-let current = null;   // { item, index }
+let queue = [];       // [{ label, chunks: [string], audio?: () => Promise<Blob|null>, onDone }]
+let current = null;   // { item, index, mode: 'speech' | 'audio' }
 let paused = false;
-let opts = { rate: 1.1, voiceURI: '', ignoreSilent: true };
+let opts = { rate: 1.1, voiceURI: '' };
 let listener = () => {};
 let problem = () => {};
 let keep = null; // iOS: an utterance with no reference can be garbage-collected, and its onend never fires
+let started = false, watchdog;
 
 export const supported = !!synth;
 export function onChange(fn) { listener = fn; }
-/** Called with a message when speech does not start (silent mode, blocked, etc.). */
+/** Called with a message when playback does not start (silent mode, blocked, etc.). */
 export function onProblem(fn) { problem = fn; }
 export function configure(o) { Object.assign(opts, o); }
 
@@ -21,30 +24,27 @@ export function jaVoices() {
 }
 if (synth) synth.addEventListener?.('voiceschanged', () => listener(state()));
 
-// ---- play even when the iPhone is in silent mode ----
-// iOS mutes web speech under the silent switch, but media playback is not muted. While speaking we
-// ask for the "playback" audio session (Safari 17+ API) and loop a tiny silent <audio>, which puts
-// the page into media-playback mode.
-let silentEl = null;
+// ---- audio element (one, reused: iOS lets it keep playing in the background) ----
+const el = new Audio();
+el.setAttribute('playsinline', '');
+el.preservesPitch = true;
+let elUrl = '';
+let silentUrl = '';
 function silentWavUrl() {
-  const rate = 8000, n = rate / 2, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
+  if (silentUrl) return silentUrl;
+  const rate = 8000, n = 800, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
   const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
   str(0, 'RIFF'); v.setUint32(4, 36 + n, true); str(8, 'WAVE'); str(12, 'fmt ');
   v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
   v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
   str(36, 'data'); v.setUint32(40, n, true);
-  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128); // 8-bit silence
-  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
+  return (silentUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })));
 }
-function holdPlayback(on) {
-  if (!opts.ignoreSilent) on = false;
-  try { if (navigator.audioSession) navigator.audioSession.type = on ? 'playback' : 'auto'; } catch {}
-  try {
-    if (on) {
-      if (!silentEl) { silentEl = new Audio(silentWavUrl()); silentEl.loop = true; silentEl.setAttribute('playsinline', ''); silentEl.volume = 0.01; }
-      silentEl.play().catch(() => {});
-    } else if (silentEl) silentEl.pause();
-  } catch {}
+/** Call inside a tap before any await: lets later el.play() calls work without a tap. */
+export function unlock() {
+  if (current?.mode === 'audio') return;
+  try { el.src = silentWavUrl(); el.play().catch(() => {}); } catch {}
 }
 
 export function clean(text) {
@@ -65,36 +65,55 @@ function split(text) {
 }
 
 export function state() {
-  return { speaking: !!current, paused, label: current?.item.label || '', left: queue.length };
+  return { speaking: !!current, paused, label: current?.item.label || '', left: queue.length, mode: current?.mode || '' };
 }
 
-/** play([{label, text, onDone}], {append}) */
+/** play([{label, text, audio, onDone}], {append}) */
 export function play(items, { append = false } = {}) {
-  if (!synth) { alert('この端末では読み上げを使えません'); return; }
-  const mapped = items.map(i => ({ label: i.label, chunks: split(i.text), onDone: i.onDone })).filter(i => i.chunks.length);
+  const mapped = items.map(i => ({ label: i.label, chunks: split(i.text), audio: i.audio, onDone: i.onDone }))
+    .filter(i => i.chunks.length || i.audio);
   if (append && current) { queue.push(...mapped); listener(state()); return; }
-  holdPlayback(true); // must start inside the tap
-  const wasActive = synth.speaking || synth.pending;
+  const wasSpeaking = synth && (synth.speaking || synth.pending);
   stop(false);
+  unlock(); // inside the tap
   queue = mapped;
-  if (!queue.length) return;
+  if (!queue.length) { listener(state()); return; }
   started = false;
-  // After cancel(), give iOS a moment before speaking again (speech is already unlocked by then).
-  if (wasActive) setTimeout(next, 150); else next();
-  // If nothing starts within a few seconds, tell the user what to check.
+  // After cancel(), give iOS a moment before speaking again.
+  if (wasSpeaking) setTimeout(next, 150); else next();
   clearTimeout(watchdog);
   watchdog = setTimeout(() => {
-    if (!started && current) problem('読み上げが始まりません。iPhoneの消音モード（マナーモード）をオフにして、音量を上げてから、もう一度押してください。');
-  }, 3000);
+    if (!started && current?.mode === 'speech') problem('読み上げが始まりません。iPhoneの声は消音モード（マナーモード）では鳴りません。消音モードをオフにするか、設定で「音声ファイルを作る」をオンにしてください。');
+  }, 3500);
 }
-let started = false, watchdog;
 
-function next() {
+async function next() {
   const item = queue.shift();
-  if (!item) { current = null; paused = false; holdPlayback(false); listener(state()); return; }
-  current = { item, index: 0 };
+  if (!item) { current = null; paused = false; setMediaSession(null); listener(state()); return; }
+  const cur = { item, index: 0, mode: 'speech' };
+  current = cur;
+  let blob = null;
+  if (item.audio) { try { blob = await item.audio(); } catch {} }
+  if (current !== cur) return; // stopped meanwhile
+  if (blob) { cur.mode = 'audio'; playAudio(cur, blob); }
+  else if (!item.chunks.length || !synth) { item.onDone?.(); next(); }
+  else { listener(state()); speakChunk(); }
+}
+
+function playAudio(cur, blob) {
+  if (elUrl) URL.revokeObjectURL(elUrl);
+  elUrl = URL.createObjectURL(blob);
+  el.src = elUrl;
+  el.playbackRate = opts.rate;
+  el.onended = () => { if (current !== cur) return; cur.item.onDone?.(); next(); };
+  el.onerror = () => { if (current !== cur) return; cur.mode = 'speech'; listener(state()); speakChunk(); };
+  setMediaSession(cur.item.label);
   listener(state());
-  speakChunk();
+  el.play().then(() => { started = true; }).catch(() => {
+    if (current !== cur) return;
+    problem('音声を再生できませんでした。もう一度ボタンを押してください。');
+    stop();
+  });
 }
 
 function speakChunk() {
@@ -116,21 +135,36 @@ function speakChunk() {
   synth.speak(u);
 }
 
+// Lock screen / Control Center controls while an audio file plays.
+function setMediaSession(title) {
+  const ms = navigator.mediaSession; if (!ms) return;
+  try {
+    ms.metadata = title ? new MediaMetadata({ title, artist: 'YouTube新着ダイジェスト' }) : null;
+    ms.setActionHandler('play', () => { if (paused) togglePause(); });
+    ms.setActionHandler('pause', () => { if (!paused) togglePause(); });
+    ms.setActionHandler('nexttrack', () => skip());
+    ms.setActionHandler('stop', () => stop());
+  } catch {}
+}
+
 export function togglePause() {
   if (!current) return;
-  if (paused) { synth.resume(); paused = false; }
-  else { synth.pause(); paused = true; }
+  if (current.mode === 'audio') { paused ? el.play().catch(() => {}) : el.pause(); }
+  else if (paused) synth.resume(); else synth.pause();
+  paused = !paused;
   listener(state());
 }
 export function skip() {
   if (!current) return;
-  current = null; synth.cancel(); paused = false;
-  setTimeout(next, 150);
+  const wasSpeech = current.mode === 'speech';
+  current = null; paused = false;
+  el.pause();
+  if (wasSpeech && synth) { synth.cancel(); setTimeout(next, 150); } else next();
 }
 export function stop(notify = true) {
   queue = []; current = null; paused = false;
-  if (notify) holdPlayback(false);
+  el.pause();
   // iOS: cancel() right before speak() can make the next speak() silently do nothing, so cancel only when needed.
   if (synth && (synth.speaking || synth.pending)) synth.cancel();
-  if (notify) listener(state());
+  if (notify) { setMediaSession(null); listener(state()); }
 }
