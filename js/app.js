@@ -220,6 +220,7 @@ async function summarizeMany(ids) {
     }
   } finally {
     busy = false; setBusyUI();
+    renderFeed(); // re-enable the buttons that were disabled while the batch ran
     progress(`${ok} 件を要約しました${stopBatch ? '（途中で止めました）' : ''}`);
   }
 }
@@ -604,7 +605,8 @@ $('#import-file').addEventListener('change', async e => {
   } catch { toast('読み込めませんでした'); }
 });
 
-AI.onRetryWait(({ seconds, attempt, reason }) => {
+AI.onRetryWait(({ seconds, attempt, reason, fallback }) => {
+  if (fallback) return progress(`混雑が続いているため、別のモデル（${fallback}）で試しています…`);
   progress(`${reason}のため、${seconds}秒待ってから自動で再試行します（${attempt}回目）…`);
 });
 AI.onModelSwitch(m => {

@@ -3,7 +3,7 @@
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/';
 
 // Busy servers (503 "high demand" etc.) and short per-minute limits are retried automatically.
-const WAITS = [15, 30, 60]; // seconds
+const WAITS = globalThis.__ytdWaits || [15, 30, 60]; // seconds (overridable for tests)
 let onWait = () => {};
 export function onRetryWait(fn) { onWait = fn; }
 const sleep = s => new Promise(r => setTimeout(r, s * 1000));
@@ -16,13 +16,14 @@ async function call(opts) {
       const network = e.name === 'TypeError'; // connection dropped
       const quotaDelay = e.status === 429 ? e.retryDelay : 0; // per-minute limit: Google says how long to wait
       let wait = 0;
-      if ((busy || network) && attempt < WAITS.length) wait = WAITS[attempt];
+      const waits = opts.isFallback ? WAITS.slice(0, 1) : WAITS; // fallback model: one retry only
+      if ((busy || network) && attempt < waits.length) wait = waits[attempt];
       else if (quotaDelay && quotaDelay <= 90 && attempt < 2) wait = quotaDelay + 2;
       if (!wait) {
-        if (busy) throw Object.assign(new Error('Geminiが混雑していて要約できませんでした。数分〜数十分おいてから、もう一度「要約する」を押してください。'), { status: e.status, raw: e.raw });
+        if (busy) throw Object.assign(new Error('Geminiが混雑していて要約できませんでした。数分〜数十分おいてから、もう一度「要約する」を押してください。'), { status: e.status, raw: e.raw, busy: true });
         throw e;
       }
-      onWait({ seconds: wait, attempt: attempt + 1, reason: quotaDelay && !busy ? '無料枠の1分あたりの上限' : 'Geminiが混雑中' });
+      onWait({ seconds: wait, attempt: attempt + 1, reason: (quotaDelay && !busy ? '無料枠の1分あたりの上限' : 'Geminiが混雑中') + (opts.isFallback ? `（${opts.model}）` : '') });
       await sleep(wait);
     }
   }
@@ -73,6 +74,14 @@ async function callSafe(opts, videoPart) {
   try { return await callMedia(opts, videoPart); }
   catch (e) {
     const raw = e.raw || '';
+    if (e.busy && !opts.isFallback) {
+      // Still busy after waiting: try another flash model once (each model has its own capacity).
+      const alt = await pickAlternative(opts.key, opts.model).catch(() => null);
+      if (!alt) throw e;
+      onWait({ seconds: 0, attempt: 0, reason: '', fallback: alt });
+      try { return await callMedia({ ...opts, model: alt, isFallback: true }, videoPart); }
+      catch { throw e; }
+    }
     const retired = /no longer available|deprecated|retired|is not found|not supported for generateContent/i.test(raw);
     if (!retired) throw e;
     const next = (raw.match(/models\/(gemini[\w.\-]*)/g) || []).map(m => m.slice(7)).find(m => m !== opts.model);
@@ -171,6 +180,15 @@ ${question}
 ・読み上げ用の文章で書く（箇条書き・記号なし）。`;
   const parts = withVideo ? [videoPart(video.id, fps), { text: ctx }] : [{ text: ctx }];
   return (await callSafe({ key, model, system: SYSTEM, contents: [{ role: 'user', parts }], lowCost: withVideo }, withVideo ? parts[0] : null)).trim();
+}
+
+/** Another stable flash model, newest first; full flash before flash-lite. */
+async function pickAlternative(key, current) {
+  const ver = m => parseFloat((m.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
+  const list = (await listModels(key))
+    .filter(m => /flash/.test(m) && m !== current && !/preview|exp|thinking|latest/.test(m))
+    .sort((a, b) => (/lite/.test(a) - /lite/.test(b)) || ver(b) - ver(a));
+  return list[0] || null;
 }
 
 /** Models usable with generateContent (to pick a newer free model). */
