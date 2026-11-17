@@ -4,7 +4,7 @@ const synth = window.speechSynthesis;
 let queue = [];       // [{ label, chunks: [string], onDone }]
 let current = null;   // { item, index }
 let paused = false;
-let opts = { rate: 1.1, voiceURI: '' };
+let opts = { rate: 1.1, voiceURI: '', ignoreSilent: true };
 let listener = () => {};
 let problem = () => {};
 let keep = null; // iOS: an utterance with no reference can be garbage-collected, and its onend never fires
@@ -20,6 +20,32 @@ export function jaVoices() {
   return synth.getVoices().filter(v => /^ja/i.test(v.lang));
 }
 if (synth) synth.addEventListener?.('voiceschanged', () => listener(state()));
+
+// ---- play even when the iPhone is in silent mode ----
+// iOS mutes web speech under the silent switch, but media playback is not muted. While speaking we
+// ask for the "playback" audio session (Safari 17+ API) and loop a tiny silent <audio>, which puts
+// the page into media-playback mode.
+let silentEl = null;
+function silentWavUrl() {
+  const rate = 8000, n = rate / 2, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); v.setUint32(4, 36 + n, true); str(8, 'WAVE'); str(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+  str(36, 'data'); v.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128); // 8-bit silence
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+function holdPlayback(on) {
+  if (!opts.ignoreSilent) on = false;
+  try { if (navigator.audioSession) navigator.audioSession.type = on ? 'playback' : 'auto'; } catch {}
+  try {
+    if (on) {
+      if (!silentEl) { silentEl = new Audio(silentWavUrl()); silentEl.loop = true; silentEl.setAttribute('playsinline', ''); silentEl.volume = 0.01; }
+      silentEl.play().catch(() => {});
+    } else if (silentEl) silentEl.pause();
+  } catch {}
+}
 
 export function clean(text) {
   return String(text || '')
@@ -47,6 +73,7 @@ export function play(items, { append = false } = {}) {
   if (!synth) { alert('この端末では読み上げを使えません'); return; }
   const mapped = items.map(i => ({ label: i.label, chunks: split(i.text), onDone: i.onDone })).filter(i => i.chunks.length);
   if (append && current) { queue.push(...mapped); listener(state()); return; }
+  holdPlayback(true); // must start inside the tap
   const wasActive = synth.speaking || synth.pending;
   stop(false);
   queue = mapped;
@@ -64,7 +91,7 @@ let started = false, watchdog;
 
 function next() {
   const item = queue.shift();
-  if (!item) { current = null; paused = false; listener(state()); return; }
+  if (!item) { current = null; paused = false; holdPlayback(false); listener(state()); return; }
   current = { item, index: 0 };
   listener(state());
   speakChunk();
@@ -102,6 +129,7 @@ export function skip() {
 }
 export function stop(notify = true) {
   queue = []; current = null; paused = false;
+  if (notify) holdPlayback(false);
   // iOS: cancel() right before speak() can make the next speak() silently do nothing, so cancel only when needed.
   if (synth && (synth.speaking || synth.pending)) synth.cancel();
   if (notify) listener(state());
