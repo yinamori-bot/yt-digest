@@ -8,7 +8,13 @@ async function yt(path, params, { key, token } = {}) {
   const r = await fetch(u, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const e = new Error('YouTube API: ' + (j.error?.message || r.status));
+    const raw = j.error?.message || String(r.status);
+    const hint = /API keys are not supported|API_KEY_SERVICE_BLOCKED|blocked|not been used|disabled|API key not valid|PERMISSION_DENIED/i.test(raw) && !token
+      ? (/not been used|disabled/i.test(raw)
+        ? 'このキーのプロジェクトで「YouTube Data API v3」が有効になっていません。Google Cloudで有効にしてください。'
+        : 'このAPIキーはYouTubeでは使えません。Google Cloudの「認証情報」でYouTube用のAPIキーを作り、設定の「YouTube Data APIキー」に入れてください。')
+      : '';
+    const e = new Error(hint ? `${hint}（${raw.slice(0, 80)}）` : 'YouTube API: ' + raw);
     e.status = r.status; throw e;
   }
   return j;
