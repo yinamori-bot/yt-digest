@@ -66,13 +66,17 @@
 
 ## 置き場所（公開のしかた）
 
-静的なファイルだけなので、GitHub Pagesなどにそのまま置けます。このリポジトリでGitHub Pagesを有効にした場合のURLは `https://<ユーザー名>.github.io/<リポジトリ名>/yt-digest/` です。iPhoneのSafariで開き、共有ボタン →「ホーム画面に追加」。
+GitHub Pagesで公開しています：**https://yinamori-bot.github.io/yt-digest/**
+
+iPhoneのChrome（またはSafari）で開き、共有ボタン →「ホーム画面に追加」でアプリのように使えます。`main` ブランチに反映した変更は、数分で公開中のアプリにも反映されます。
+
+公開の設定：リポジトリの Settings → Pages →「Deploy from a branch」→ `main` / `(root)` → Save。
 
 ローカルで動かす場合：
 
 ```
 python3 -m http.server 8000
-# http://localhost:8000/yt-digest/ を開く
+# http://localhost:8000/ を開く
 ```
 
 ## ファイル
