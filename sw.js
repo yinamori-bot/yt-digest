@@ -1,5 +1,5 @@
 // Offline shell: same-origin files only, network first. API calls (YouTube/Gemini) are never cached.
-const CACHE = 'ytd-v3';
+const CACHE = 'ytd-v4';
 const ASSETS = ['./', 'index.html', 'style.css', 'js/app.js', 'js/store.js', 'js/youtube.js', 'js/gemini.js', 'js/speech.js', 'manifest.webmanifest', 'icon.svg'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS))); self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('ytd-') && k !== CACHE).map(k => caches.delete(k))))); self.clients.claim(); });

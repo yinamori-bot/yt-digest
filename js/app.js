@@ -604,6 +604,9 @@ $('#import-file').addEventListener('change', async e => {
   } catch { toast('読み込めませんでした'); }
 });
 
+AI.onRetryWait(({ seconds, attempt, reason }) => {
+  progress(`${reason}のため、${seconds}秒待ってから自動で再試行します（${attempt}回目）…`);
+});
 AI.onModelSwitch(m => {
   settings.model = m; store.save('settings', settings);
   form.model.value = m;

@@ -2,7 +2,33 @@
 // so no transcript download is needed.
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/';
 
-async function call({ key, model, contents, system, schema, lowCost = true }) {
+// Busy servers (503 "high demand" etc.) and short per-minute limits are retried automatically.
+const WAITS = [15, 30, 60]; // seconds
+let onWait = () => {};
+export function onRetryWait(fn) { onWait = fn; }
+const sleep = s => new Promise(r => setTimeout(r, s * 1000));
+
+async function call(opts) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await callOnce(opts); }
+    catch (e) {
+      const busy = [500, 502, 503, 504].includes(e.status) || /high demand|overloaded|unavailable|try again later/i.test(e.raw || '');
+      const network = e.name === 'TypeError'; // connection dropped
+      const quotaDelay = e.status === 429 ? e.retryDelay : 0; // per-minute limit: Google says how long to wait
+      let wait = 0;
+      if ((busy || network) && attempt < WAITS.length) wait = WAITS[attempt];
+      else if (quotaDelay && quotaDelay <= 90 && attempt < 2) wait = quotaDelay + 2;
+      if (!wait) {
+        if (busy) throw Object.assign(new Error('Geminiが混雑していて要約できませんでした。数分〜数十分おいてから、もう一度「要約する」を押してください。'), { status: e.status, raw: e.raw });
+        throw e;
+      }
+      onWait({ seconds: wait, attempt: attempt + 1, reason: quotaDelay && !busy ? '無料枠の1分あたりの上限' : 'Geminiが混雑中' });
+      await sleep(wait);
+    }
+  }
+}
+
+async function callOnce({ key, model, contents, system, schema, lowCost = true }) {
   const generationConfig = { temperature: 0.4 };
   if (schema) Object.assign(generationConfig, { responseMimeType: 'application/json', responseSchema: schema });
   if (lowCost) generationConfig.mediaResolution = 'MEDIA_RESOLUTION_LOW';
@@ -19,7 +45,10 @@ async function call({ key, model, contents, system, schema, lowCost = true }) {
     const e = new Error(r.status === 429
       ? '無料枠の回数・量の上限に達しました。少し（または翌日まで）待ってから再実行してください。' + `（${msg.slice(0, 120)}）`
       : 'Gemini: ' + msg);
-    e.status = r.status; e.raw = msg; throw e;
+    e.status = r.status; e.raw = msg;
+    const delay = (j.error?.details || []).find(d => d.retryDelay)?.retryDelay; // e.g. "37s"
+    if (delay) e.retryDelay = parseFloat(delay) || 0;
+    throw e;
   }
   const cand = j.candidates?.[0];
   const text = (cand?.content?.parts || []).filter(p => !p.thought && p.text).map(p => p.text).join('');
