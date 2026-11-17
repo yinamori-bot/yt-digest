@@ -558,6 +558,7 @@ $('#btn-play-all').addEventListener('click', () => {
 });
 
 // ---- player bar ---------------------------------------------------------------
+TTS.onProblem(msg => toast(msg, 7000));
 TTS.onChange(st => {
   $('#player').hidden = !st.speaking;
   $('#player-label').textContent = st.label + (st.left ? `（あと${st.left}件）` : '');
