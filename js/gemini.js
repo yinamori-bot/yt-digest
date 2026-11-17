@@ -28,12 +28,28 @@ async function call({ key, model, contents, system, schema, lowCost = true }) {
 }
 
 /** Retries once without the cost-saving options if the model rejects them. */
-async function callSafe(opts, videoPart) {
+async function callMedia(opts, videoPart) {
   try { return await call(opts); }
   catch (e) {
     if (e.status !== 400 || !/media|resolution|fps|video_?metadata/i.test(e.raw || '')) throw e;
     if (videoPart) delete videoPart.videoMetadata;
     return call({ ...opts, lowCost: false });
+  }
+}
+
+// Google retires models over time. When the error names a replacement model, switch to it and retry.
+let onSwitch = () => {};
+export function onModelSwitch(fn) { onSwitch = fn; }
+async function callSafe(opts, videoPart) {
+  try { return await callMedia(opts, videoPart); }
+  catch (e) {
+    const raw = e.raw || '';
+    const retired = /no longer available|deprecated|retired|is not found|not supported for generateContent/i.test(raw);
+    if (!retired) throw e;
+    const next = (raw.match(/models\/(gemini[\w.\-]*)/g) || []).map(m => m.slice(7)).find(m => m !== opts.model);
+    if (!next) throw new Error(`モデル「${opts.model}」は使えなくなりました。設定の「モデル」の「一覧」から新しいモデル（名前にflashが入ったもの）を選んで保存してください。`);
+    onSwitch(next);
+    return callMedia({ ...opts, model: next }, videoPart);
   }
 }
 

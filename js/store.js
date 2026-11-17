@@ -13,7 +13,7 @@ export const DEFAULT_SETTINGS = {
   geminiKey: '',
   ytKey: '',          // empty = use geminiKey
   clientId: '',       // optional OAuth client ID for importing subscriptions
-  model: 'gemini-2.5-flash',
+  model: 'gemini-3.8-flash',
   days: 3,            // look back this many days for new uploads
   perChannel: 5,      // newest N uploads per channel
   skipShorts: true,   // skip videos of 3 minutes or less

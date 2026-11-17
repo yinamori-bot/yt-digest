@@ -604,6 +604,12 @@ $('#import-file').addEventListener('change', async e => {
   } catch { toast('読み込めませんでした'); }
 });
 
+AI.onModelSwitch(m => {
+  settings.model = m; store.save('settings', settings);
+  form.model.value = m;
+  toast(`使っていたモデルが終了したため、「${m}」に切り替えました`, 5000);
+});
+
 // ---- start ----------------------------------------------------------------------
 TTS.configure(settings);
 fillSettings();
