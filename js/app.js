@@ -714,7 +714,7 @@ $('#btn-tts-test').addEventListener('click', async () => {
   const was = settings.audioMode;
   if (settings.audioMode === 'off') settings.audioMode = 'sum'; // allow the test even when turned off
   settings.ttsVoice = form.ttsVoice.value; settings.ttsModel = form.ttsModel.value.trim();
-  settings.ttsRpm = +form.ttsRpm.value || 3; settings.ttsRpd = +form.ttsRpd.value || 10;
+  settings.ttsRpm = +form.ttsRpm.value || 3; settings.ttsRpd = +form.ttsRpd.value || 15;
   TTS.configure({ rate: +form.rate.value });
   toast('音声ファイルを作っています（10〜30秒ほど）…', 30000);
   try {

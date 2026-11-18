@@ -28,7 +28,7 @@ export const DEFAULT_SETTINGS = {
   ttsVoice: 'Kore',
   ttsModel: '',       // empty = pick the newest flash TTS model automatically
   ttsRpm: 3,          // free-tier requests per minute for the TTS model (AI Studio "RPM")
-  ttsRpd: 10,         // free-tier requests per day (AI Studio "RPD")
+  ttsRpd: 15,         // free-tier requests per day (AI Studio "RPD")
 };
 
 export function exportAll() {
