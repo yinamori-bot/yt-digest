@@ -1,3 +1,6 @@
 *backup*.json
 yt-digest-data-*.json
 node_modules/
+mac/.env
+mac/state/
+mac/logs/

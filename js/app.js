@@ -662,6 +662,54 @@ $('#import-file').addEventListener('change', async e => {
   } catch { toast('読み込めませんでした'); }
 });
 
+// ---- hand-off with the Mac pipeline (files in iCloud Drive/YTダイジェスト; format in mac/SPEC.md) ----
+async function shareFile(name, text) {
+  const file = new File([text], name, { type: 'application/json' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+$('#btn-mac-export').addEventListener('click', () => {
+  const sel = channels.filter(c => c.selected);
+  if (!sel.length) return toast('「チャンネル」タブで、要約したいチャンネルにチェックを入れてください');
+  const out = {
+    format: 'yt-digest/mac-settings', version: 1, exportedAt: new Date().toISOString(),
+    channels: sel.map(c => ({ id: c.id, title: c.title })),
+    settings: { days: settings.days, perChannel: settings.perChannel, skipShorts: settings.skipShorts, model: settings.model, fps: +settings.fps, knownLimit: settings.knownLimit },
+    known: known.map(k => k.text),
+    deleted: Object.keys(deleted),          // videos deleted here: the Mac skips them too
+    done: Object.values(videos).filter(v => v.status === 'done').map(v => v.id), // already summarised here
+  };
+  shareFile('mac-settings.json', JSON.stringify(out, null, 1));
+});
+$('#mac-import').addEventListener('change', async e => {
+  const files = [...e.target.files]; e.target.value = '';
+  let added = 0, facts = 0, bad = 0;
+  const knownSet = new Set(known.map(k => k.text));
+  for (const f of files) {
+    let obj; try { obj = JSON.parse(await f.text()); } catch { bad++; continue; }
+    if (obj.format !== 'yt-digest/digest' || !Array.isArray(obj.videos)) { bad++; continue; }
+    for (const m of obj.videos) {
+      if (!m?.id || !m.summary || deleted[m.id]) continue;
+      const cur = videos[m.id];
+      if (cur?.status === 'done' && cur.source !== 'mac') continue; // keep what was summarised on the iPhone
+      videos[m.id] = {
+        id: m.id, title: m.title, channelId: m.channelId, channelTitle: m.channelTitle, publishedAt: m.publishedAt,
+        seconds: m.seconds || 0, thumb: m.thumb || '', status: 'done', source: 'mac',
+        summary: AI.normalize(m.summary), heard: cur?.heard || false, deep: cur?.deep || [], added: cur?.added || Date.now(),
+        manual: !channels.some(c => c.id === m.channelId && c.selected),
+      };
+      if (!cur || cur.source !== 'mac') added++;
+      for (const t of m.summary.facts || []) if (t && !knownSet.has(t)) { known.push({ id: uid(), text: t, src: m.id, at: Date.now() }); knownSet.add(t); facts++; }
+    }
+  }
+  prune(); saveVideos(); saveKnown(); renderFeed();
+  toast(bad && !added ? 'Macの要約ファイルではありませんでした（digest-日付.json を選んでください）' : `Macの要約を ${added} 本取り込みました（既知に ${facts} 件追加）`, 5000);
+});
+
 AI.onRetryWait(({ seconds, attempt, reason, fallback }) => {
   if (fallback) return progress(`混雑が続いているため、別のモデル（${fallback}）で試しています…`);
   progress(`${reason}のため、${seconds}秒待ってから自動で再試行します（${attempt}回目）…`);

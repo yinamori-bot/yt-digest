@@ -139,6 +139,16 @@
           <label class="button">復元<input id="import-file" type="file" accept="application/json,.json" hidden></label>
         </div>
       </div>
+      <div class="card">
+        <h2>Macとの連携</h2>
+        <p class="muted small">Macが毎日、新着の要約と音声作り（ミュージックに追加）を行います。ファイルの受け渡しは iCloud Drive の「YTダイジェスト」フォルダを使います。</p>
+        <ol class="steps small">
+          <li><b>Macに設定を渡す</b>：要約するチャンネル（「チャンネル」タブでチェックしたもの）と「既知」の内容を書き出します。共有画面で「"ファイル"に保存」→ iCloud Drive →「YTダイジェスト」に保存してください（同じ名前のファイルは置き換え）。チャンネルや既知を変えたときにやり直します。
+            <div class="actions"><button id="btn-mac-export">Macに設定を渡す</button></div></li>
+          <li><b>Macの要約を取り込む</b>：「YTダイジェスト」フォルダの digest-日付.json を選ぶと（複数可）、要約がこのアプリにも入り、「詳しく」や質問ができます。音声はミュージックアプリで聞けます。
+            <div class="actions"><label class="button">Macの要約を取り込む<input id="mac-import" type="file" accept="application/json,.json" multiple hidden></label></div></li>
+        </ol>
+      </div>
     </section>
   </main>
 
