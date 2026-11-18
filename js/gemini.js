@@ -29,15 +29,12 @@ async function call(opts) {
   }
 }
 
-async function callOnce({ key, model, contents, system, schema, lowCost = true, body: rawBody, audio }) {
-  let body = rawBody;
-  if (!body) {
-    const generationConfig = { temperature: 0.4 };
-    if (schema) Object.assign(generationConfig, { responseMimeType: 'application/json', responseSchema: schema });
-    if (lowCost) generationConfig.mediaResolution = 'MEDIA_RESOLUTION_LOW';
-    body = { contents, generationConfig };
-    if (system) body.systemInstruction = { parts: [{ text: system }] };
-  }
+async function callOnce({ key, model, contents, system, schema, lowCost = true }) {
+  const generationConfig = { temperature: 0.4 };
+  if (schema) Object.assign(generationConfig, { responseMimeType: 'application/json', responseSchema: schema });
+  if (lowCost) generationConfig.mediaResolution = 'MEDIA_RESOLUTION_LOW';
+  const body = { contents, generationConfig };
+  if (system) body.systemInstruction = { parts: [{ text: system }] };
   const r = await fetch(`${BASE}models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
@@ -49,17 +46,12 @@ async function callOnce({ key, model, contents, system, schema, lowCost = true, 
     const e = new Error(r.status === 429
       ? '無料枠の回数・量の上限に達しました。少し（または翌日まで）待ってから再実行してください。' + `（${msg.slice(0, 120)}）`
       : 'Gemini: ' + msg);
-    e.status = r.status; e.raw = msg; e.perDay = /per ?day|PerDay|daily/i.test(JSON.stringify(j.error || {}));
+    e.status = r.status; e.raw = msg;
     const delay = (j.error?.details || []).find(d => d.retryDelay)?.retryDelay; // e.g. "37s"
     if (delay) e.retryDelay = parseFloat(delay) || 0;
     throw e;
   }
   const cand = j.candidates?.[0];
-  if (audio) {
-    const parts = (cand?.content?.parts || []).filter(p => p.inlineData?.data);
-    if (!parts.length) throw new Error('音声が作られませんでした（' + (cand?.finishReason || j.promptFeedback?.blockReason || '不明') + '）');
-    return { data: parts.map(p => p.inlineData.data), mimeType: parts[0].inlineData.mimeType };
-  }
   const text = (cand?.content?.parts || []).filter(p => !p.thought && p.text).map(p => p.text).join('');
   if (!text) throw new Error('Geminiから回答がありませんでした（' + (cand?.finishReason || j.promptFeedback?.blockReason || '不明') + '）');
   return text;
@@ -197,51 +189,6 @@ async function pickAlternative(key, current) {
     .filter(m => /flash/.test(m) && m !== current && !/preview|exp|thinking|latest/.test(m))
     .sort((a, b) => (/lite/.test(a) - /lite/.test(b)) || ver(b) - ver(a));
   return list[0] || null;
-}
-
-// ---- text to speech ----
-export const TTS_VOICES = [
-  ['Kore', '女性・しっかり'], ['Aoede', '女性・軽やか'], ['Leda', '女性・若々しい'], ['Zephyr', '女性・明るい'],
-  ['Charon', '男性・知的'], ['Orus', '男性・しっかり'], ['Puck', '男性・陽気'], ['Fenrir', '男性・元気'],
-];
-export async function listTtsModels(key) {
-  const r = await fetch(`${BASE}models?pageSize=200`, { headers: { 'x-goog-api-key': key } });
-  const j = await r.json();
-  if (!r.ok) throw new Error('Gemini: ' + (j.error?.message || r.status));
-  return (j.models || []).map(m => m.name.replace(/^models\//, '')).filter(m => /gemini/.test(m) && /tts/.test(m));
-}
-/** Newest flash TTS model (flash before pro: larger free quota). */
-export async function pickTtsModel(key) {
-  const ver = m => parseFloat((m.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
-  const list = (await listTtsModels(key)).sort((a, b) =>
-    (/pro/.test(a) - /pro/.test(b)) || (/preview/.test(a) - /preview/.test(b)) || ver(b) - ver(a));
-  if (!list.length) throw new Error('音声を作れるモデル（TTS）が見つかりませんでした');
-  return list[0];
-}
-/** Split long text at sentence ends so each request stays a few minutes long. */
-function ttsParts(text, max = 1500) {
-  const out = []; let cur = '';
-  for (const s of text.split(/(?<=[。！？!?\n])/)) {
-    if (cur && (cur + s).length > max) { out.push(cur); cur = ''; }
-    cur += s;
-  }
-  if (cur.trim()) out.push(cur);
-  return out;
-}
-/** Text → speech. Returns { data: [base64 PCM...], mimeType, requests }. */
-export async function tts({ key, model, text, voice, onPart }) {
-  const data = []; let mimeType = '';
-  const parts = ttsParts(text);
-  for (const [i, part] of parts.entries()) {
-    if (i) await onPart?.(i);
-    const body = {
-      contents: [{ role: 'user', parts: [{ text: `次の日本語の文章を、落ち着いた聞き取りやすいニュース解説の口調で読み上げてください。\n\n${part}` }] }],
-      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice || 'Kore' } } } },
-    };
-    const r = await call({ key, model, body, audio: true });
-    data.push(...r.data); mimeType ||= r.mimeType;
-  }
-  return { data, mimeType, requests: parts.length };
 }
 
 /** Models usable with generateContent (to pick a newer free model). */

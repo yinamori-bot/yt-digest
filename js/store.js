@@ -22,13 +22,8 @@ export const DEFAULT_SETTINGS = {
   voiceURI: '',
   knownLimit: 600,    // newest N known facts sent with each request
   sched1: '', sched2: '', sched3: '', // scheduled times "HH:MM" (empty = off)
-  keepAwake: true,    // keep the screen on while waiting for a schedule / summarising
-  audioMode: 'sum',   // make audio files with Gemini TTS: 'off' | 'sum' (summary) | 'all' (summary + topic details)
-  audioDeep: true,    // also make audio for deep-dive answers and questions
-  ttsVoice: 'Kore',
-  ttsModel: '',       // empty = pick the newest flash TTS model automatically
-  ttsRpm: 3,          // free-tier requests per minute for the TTS model (AI Studio "RPM")
-  ttsRpd: 15,         // free-tier requests per day (AI Studio "RPD")
+  keepAwake: true,
+  ignoreSilent: true, // read aloud even in silent mode (iPhone)    // keep the screen on while waiting for a schedule / summarising
 };
 
 export function exportAll() {

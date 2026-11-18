@@ -2,7 +2,6 @@ import * as store from './store.js';
 import * as YT from './youtube.js';
 import * as AI from './gemini.js';
 import * as TTS from './speech.js';
-import * as AUD from './audio.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -181,8 +180,6 @@ function prune() {
   let list = Object.values(videos).filter(v => v.status === 'done' || new Date(v.publishedAt) > old);
   list.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
   list = list.slice(0, 400);
-  const keep = new Set(list.map(v => v.id));
-  for (const id of Object.keys(videos)) if (!keep.has(id)) dropAudio(id);
   videos = Object.fromEntries(list.map(v => [v.id, v]));
   for (const [id, t] of Object.entries(deleted)) if (t < old) delete deleted[id];
   saveDeleted();
@@ -195,13 +192,11 @@ async function summarizeOne(id) {
   const v = videos[id]; if (!v || working.has(id)) return;
   working.add(id); renderCard(id);
   try {
-    if (v.summary) await dropAudio(id); // re-summarising: old audio no longer matches
     const s = await AI.summarize({ key: settings.geminiKey, model: settings.model, fps: +settings.fps, video: v, known: knownTexts() });
     v.summary = s; v.status = 'done'; v.heard = false; v.error = ''; v.deep = v.deep || [];
     const at = Date.now();
     for (const t of s.facts) if (t && t.trim()) known.push({ id: uid(), text: t.trim(), src: id, at });
     saveKnown();
-    queueAudio(audioJobsFor(v));
   } catch (e) {
     v.status = 'error'; v.error = e.message;
     throw e;
@@ -281,7 +276,7 @@ async function checkSchedule() {
 // Screen Wake Lock: keep the screen on while waiting for a schedule or summarising.
 let wakeLock = null;
 async function updateWakeLock() {
-  const want = !document.hidden && settings.keepAwake && (busy || audioBusy || schedTimes().length > 0);
+  const want = !document.hidden && settings.keepAwake && (busy || schedTimes().length > 0);
   try {
     if (want && !wakeLock && navigator.wakeLock) {
       wakeLock = await navigator.wakeLock.request('screen');
@@ -361,7 +356,6 @@ function renderFeed() {
         <div class="row-btns day-btns">
           <button class="small primary" data-act="day-play">▶ この日をまとめて聞く</button>
           <button class="small" data-act="day-sum">この日を要約</button>
-          ${settings.audioMode !== 'off' ? '<button class="small" data-act="day-audio">🔊 この日の音声を作る</button>' : ''}
           <button class="small danger" data-act="day-del">この日を削除</button>
         </div>
         ${vs.map(cardHtml).join('')}
@@ -378,10 +372,9 @@ function renderCard(id) {
 }
 
 function playVideos(list, intro) {
-  const allAudio = list.every(v => audioKeys.has(`${v.id}:sum`));
   TTS.play([
-    ...(allAudio ? [] : [{ label: '案内', text: intro }]),
-    ...list.map(v => ({ label: v.title, text: videoSpeech(v), audio: clip(`${v.id}:sum`), onDone: () => markHeard(v.id) })),
+    { label: '案内', text: intro },
+    ...list.map(v => ({ label: v.title, text: videoSpeech(v), onDone: () => markHeard(v.id) })),
   ]);
 }
 function dayAction(act, key) {
@@ -393,10 +386,6 @@ function dayAction(act, key) {
     const unheard = done.filter(v => !v.heard);
     const list = unheard.length ? unheard : done;
     playVideos(list, `${label}に投稿された動画、${list.length}本の要約です。`);
-  } else if (act === 'day-audio') {
-    const jobs = vs.flatMap(v => audioJobsFor(v));
-    if (!jobs.length) return toast('この日は、作る音声ファイルがありません');
-    queueAudio(jobs);
   } else if (act === 'day-sum') {
     const ids = vs.filter(v => v.status === 'new' || v.status === 'error').map(v => v.id).reverse();
     if (!ids.length) return toast('この日に未要約の動画はありません');
@@ -406,7 +395,7 @@ function dayAction(act, key) {
     if (!all.length) return;
     if (!confirm(`${label}の動画 ${all.length} 本の要約を削除しますか？\n（「既知」の記録は残るので、同じ内容は今後も省かれます）`)) return;
     const now = Date.now();
-    for (const v of all) { deleted[v.id] = now; delete videos[v.id]; openState.delete(v.id); dropAudio(v.id); }
+    for (const v of all) { deleted[v.id] = now; delete videos[v.id]; openState.delete(v.id); }
     dayOpen.delete(key);
     saveVideos(); saveDeleted(); renderFeed();
     toast(`${label}の要約を削除しました`);
@@ -418,7 +407,7 @@ const detailOpen = new Set(); // "videoId:topicIndex" whose detailed text is sho
 function cardHtml(v) {
   const s = v.summary, w = working.has(v.id);
   const badge = w ? '<span class="badge busy">処理中…</span>'
-    : v.status === 'done' ? (v.heard ? '<span class="badge">聞いた</span>' : '<span class="badge new">未聴</span>') + (audioKeys.has(`${v.id}:sum`) ? ' <span class="badge" title="音声ファイルあり">🔊</span>' : '')
+    : v.status === 'done' ? (v.heard ? '<span class="badge">聞いた</span>' : '<span class="badge new">未聴</span>')
     : v.status === 'error' ? '<span class="badge err">エラー</span>'
     : v.status === 'skipped' ? `<span class="badge">スキップ${v.reason ? '・' + esc(v.reason) : ''}</span>`
     : '<span class="badge">未要約</span>';
@@ -510,13 +499,7 @@ async function deepDive(v, { pi, q, label, withVideo }) {
     const a = await AI.explain({ key: settings.geminiKey, model: settings.model, fps: +settings.fps, video: v, summary: v.summary, history, question: q, withVideo });
     const d = { id: uid(), pi, q, label, a, withVideo: !!withVideo, at: Date.now() };
     (v.deep ||= []).push(d); saveVideos();
-    const key = `${v.id}:d${d.id}`;
-    if (settings.audioDeep && canTts()) {
-      progress('回答を音声ファイルにしています…');
-      try { await makeClip(key, a); } catch (e) { handleTtsError(e); }
-      progress('');
-    }
-    TTS.play([{ label: `${label || '回答'}：${v.title}`, text: a, audio: clip(key) }]);
+    TTS.play([{ label: `${label || '回答'}：${v.title}`, text: a }]);
   } catch (e) { toast(e.message, 6000); }
   finally { working.delete(v.id); openState.set(v.id, true); renderCard(v.id); }
 }
@@ -526,7 +509,6 @@ $('#videos').addEventListener('click', e => {
   if (btn.dataset.act.startsWith('day-')) return dayAction(btn.dataset.act, btn.closest('.day').dataset.day);
   const card = btn.closest('.video'); const v = videos[card?.dataset.id]; if (!v) return;
   const act = btn.dataset.act, i = +btn.dataset.i;
-  TTS.unlock(); // so audio can start later, after network/IndexedDB waits
   const p = v.summary ? AI.normalize(v.summary).topics[i] : null;
   const d = (v.deep || []).find(x => x.id === btn.closest('.deep-item')?.dataset.did);
   switch (act) {
@@ -534,17 +516,17 @@ $('#videos').addEventListener('click', e => {
     case 'skip': v.status = 'skipped'; v.reason = ''; saveVideos(); renderFeed(); break;
     case 'unskip': v.status = v.summary ? 'done' : 'new'; saveVideos(); renderFeed(); break;
     case 'heard': v.heard = !v.heard; openState.delete(v.id); saveVideos(); renderCard(v.id); break;
-    case 'read': TTS.play([{ label: v.title, text: videoSpeech(v), audio: clip(`${v.id}:sum`), onDone: () => markHeard(v.id) }]); break;
+    case 'read': TTS.play([{ label: v.title, text: videoSpeech(v), onDone: () => markHeard(v.id) }]); break;
     case 'read-topic': TTS.play([{ label: p.title, text: `${p.title}。${p.summary}` }]); break;
     case 'detail':
       if (p.detail) {
         detailOpen.add(v.id + ':' + i);
         card.querySelector(`.topic-detail[data-i="${i}"]`)?.setAttribute('open', '');
-        TTS.play([{ label: `詳しく：${p.title}`, text: detailSpeech(p), audio: clip(`${v.id}:t${i}`) }]);
+        TTS.play([{ label: `詳しく：${p.title}`, text: `${p.title}について、詳しく説明します。\n${p.detail}` }]);
       } else deepDive(v, { pi: i, label: `「${p.title}」を詳しく`, q: `「${p.title}」について、もっと詳しく知りたい。要約では「${p.summary}」と説明されている。` });
       break;
     case 'deeper-topic': deepDive(v, { pi: i, label: 'さらに詳しく', q: `「${p.title}」について、すでに説明した内容よりさらに掘り下げて、詳しく説明してほしい。` }); break;
-    case 'read-deep': TTS.play([{ label: d.label || d.q, text: d.a, audio: clip(`${v.id}:d${d.id}`) }]); break;
+    case 'read-deep': TTS.play([{ label: d.label || d.q, text: d.a }]); break;
     case 'deeper': deepDive(v, { pi: d.pi, label: 'さらに詳しく', q: `直前の説明「${d.a.slice(0, 200)}…」の内容を、さらに掘り下げて詳しく説明してほしい。` }); break;
     case 'deep-video': deepDive(v, { pi: d.pi, label: (d.label || '回答') + '（動画で確認）', q: d.q, withVideo: true }); break;
     case 'ask': {
@@ -614,125 +596,8 @@ $('#btn-known-add').addEventListener('click', () => {
 });
 $('#known-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) $('#btn-known-add').click(); });
 
-// ---- audio files (Gemini TTS) ------------------------------------------------------
-let audioKeys = new Set();
-AUD.keys().then(ks => { audioKeys = new Set(ks.map(String)); renderFeed(); renderAudioSize(); });
-const clip = key => () => audioKeys.has(key) ? AUD.get(key) : Promise.resolve(null);
-const detailSpeech = t => `${t.title}について、詳しく説明します。\n${t.detail}`;
-const sleepMs = ms => new Promise(r => setTimeout(r, ms));
-function dropAudio(id) {
-  return AUD.removeVideo(id).then(ks => { ks.forEach(k => audioKeys.delete(String(k))); renderAudioSize(); }).catch(() => {});
-}
-
-// Free-tier usage, counted per Pacific-time day (that is when Google resets the daily quota).
-const ptDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
-let ttsUsage = store.load('ttsUsage', { date: '', count: 0, blocked: false });
-function usage() {
-  if (ttsUsage.date !== ptDate()) { ttsUsage = { date: ptDate(), count: 0, blocked: false }; store.save('ttsUsage', ttsUsage); }
-  return ttsUsage;
-}
-const canTts = () => settings.audioMode !== 'off' && !!settings.geminiKey && !usage().blocked && usage().count < settings.ttsRpd;
-function renderTtsUsage() {
-  const u = usage();
-  $('#tts-usage').textContent = `今日作った回数：${u.count} / ${settings.ttsRpd} 回${u.blocked ? '（今日の無料枠を使い切りました）' : ''}。毎日、日本時間の16〜17時ごろにリセットされます。` +
-    (settings.ttsModel ? ` 使っているモデル：${settings.ttsModel}` : '');
-}
-async function renderAudioSize() {
-  const mb = (await AUD.totalBytes()) / 1048576;
-  $('#audio-size').textContent = `保存している音声ファイル：${audioKeys.size} 件、${mb.toFixed(1)} MB`;
-}
-function handleTtsError(e) {
-  if (e.status === 429) {
-    usage().blocked = true; store.save('ttsUsage', ttsUsage); renderTtsUsage();
-    toast('音声ファイルの無料枠を今日の分使い切りました。残りはiPhoneの声で読み上げます（消音モードでは鳴りません）', 7000);
-  } else toast('音声ファイルを作れませんでした：' + e.message, 6000);
-}
-
-// Space requests to the per-minute limit, and count each one against the daily limit.
-let lastTtsAt = 0;
-async function ttsSlot() {
-  if (!canTts()) throw Object.assign(new Error('今日の音声ファイルの上限に達しました'), { status: 429 });
-  const gap = Math.ceil(60000 / settings.ttsRpm) + 1000;
-  const wait = lastTtsAt + gap - Date.now();
-  if (wait > 0) { audioProgress(`🔊 1分あたりの上限に合わせて、${Math.ceil(wait / 1000)}秒待っています…`); await sleepMs(wait); }
-  lastTtsAt = Date.now();
-  usage().count++; store.save('ttsUsage', ttsUsage); renderTtsUsage();
-}
-async function makeClip(key, text) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      if (!settings.ttsModel) { settings.ttsModel = await AI.pickTtsModel(settings.geminiKey); store.save('settings', settings); }
-      await ttsSlot();
-      const r = await AI.tts({ key: settings.geminiKey, model: settings.ttsModel, text: TTS.clean(text), voice: settings.ttsVoice, onPart: ttsSlot });
-      const w = AUD.pcmToWav(r.data, r.mimeType);
-      await AUD.putBuffer(key, w.type, w.buf);
-      audioKeys.add(key); renderAudioSize();
-      return;
-    } catch (e) {
-      // The chosen model was retired: pick again once.
-      if (attempt === 0 && [400, 404].includes(e.status) && /not found|no longer|deprecated|not supported/i.test(e.raw || '')) { settings.ttsModel = ''; continue; }
-      throw e;
-    }
-  }
-}
-
-function audioJobsFor(v) {
-  if (settings.audioMode === 'off' || v.status !== 'done' || !v.summary) return [];
-  const s = AI.normalize(v.summary);
-  const jobs = [{ vid: v.id, key: `${v.id}:sum`, text: videoSpeech(v) }];
-  if (settings.audioMode === 'all') s.topics.forEach((t, i) => { if (t.detail) jobs.push({ vid: v.id, key: `${v.id}:t${i}`, text: detailSpeech(t) }); });
-  return jobs.filter(j => !audioKeys.has(j.key));
-}
-const audioJobs = [];
-let audioBusy = false;
-function audioProgress(msg) { const el = $('#audio-progress'); el.hidden = !msg; el.textContent = msg || ''; }
-function queueAudio(jobs) {
-  if (!jobs.length) return;
-  if (!canTts()) { if (settings.audioMode !== 'off') toast('今日の音声ファイルの無料枠を使い切っているため、iPhoneの声で読み上げます', 5000); return; }
-  for (const j of jobs) if (!audioJobs.some(x => x.key === j.key)) audioJobs.push(j);
-  runAudioJobs();
-}
-async function runAudioJobs() {
-  if (audioBusy) return;
-  audioBusy = true; updateWakeLock();
-  try {
-    while (audioJobs.length) {
-      const j = audioJobs.shift();
-      if (!videos[j.vid] || audioKeys.has(j.key)) continue;
-      audioProgress(`🔊 音声ファイルを作成中…（残り${audioJobs.length + 1}件）「${videos[j.vid].title}」`);
-      try { await makeClip(j.key, j.text); renderCard(j.vid); }
-      catch (e) { handleTtsError(e); if (e.status === 429) { audioJobs.length = 0; break; } }
-    }
-  } finally {
-    audioBusy = false; audioProgress(''); renderTtsUsage(); updateWakeLock();
-  }
-}
-$('#btn-tts-test').addEventListener('click', async () => {
-  TTS.unlock();
-  const key = form.geminiKey.value.trim(); if (!key) return toast('先にGemini APIキーを入れてください');
-  settings.geminiKey ||= key;
-  const was = settings.audioMode;
-  if (settings.audioMode === 'off') settings.audioMode = 'sum'; // allow the test even when turned off
-  settings.ttsVoice = form.ttsVoice.value; settings.ttsModel = form.ttsModel.value.trim();
-  settings.ttsRpm = +form.ttsRpm.value || 3; settings.ttsRpd = +form.ttsRpd.value || 15;
-  TTS.configure({ rate: +form.rate.value });
-  toast('音声ファイルを作っています（10〜30秒ほど）…', 30000);
-  try {
-    await AUD.removeKeys(['test:voice']); audioKeys.delete('test:voice');
-    await makeClip('test:voice', 'こんにちは。この声と速さで、動画の要約を読み上げます。消音モードでも聞こえていれば成功です。');
-    toast('作成しました。再生します', 2000);
-    TTS.play([{ label: '音声ファイルのテスト', text: '', audio: clip('test:voice') }]);
-  } catch (e) { handleTtsError(e); }
-  finally { settings.audioMode = was; form.ttsModel.value = settings.ttsModel; renderTtsUsage(); }
-});
-$('#btn-audio-clear').addEventListener('click', async () => {
-  if (!confirm('保存した音声ファイルをすべて削除しますか？（要約は残ります。音声はiPhoneの声で読み上げられます）')) return;
-  await AUD.clear(); audioKeys.clear(); renderAudioSize(); renderFeed(); toast('削除しました');
-});
-
 // ---- settings ------------------------------------------------------------------
 const form = $('#settings');
-$('#tts-voice').innerHTML = AI.TTS_VOICES.map(([v, d]) => `<option value="${v}">${v}（${d}）</option>`).join('');
 function fillSettings() {
   for (const el of form.elements) {
     if (!el.name || !(el.name in settings)) continue;
@@ -758,18 +623,17 @@ form.addEventListener('submit', e => {
     days: n('days', 1, 30), perChannel: n('perChannel', 1, 20), skipShorts: form.skipShorts.checked,
     fps: +form.fps.value, knownLimit: n('knownLimit', 50, 5000), rate: +form.rate.value, voiceURI: form.voiceURI.value,
     sched1: form.sched1.value, sched2: form.sched2.value, sched3: form.sched3.value, keepAwake: form.keepAwake.checked,
-    audioMode: form.audioMode.value, audioDeep: form.audioDeep.checked, ttsVoice: form.ttsVoice.value,
-    ttsModel: form.ttsModel.value.trim(), ttsRpm: n('ttsRpm', 1, 1000), ttsRpd: n('ttsRpd', 1, 10000),
+    ignoreSilent: form.ignoreSilent.checked,
   });
   // New schedule: start counting from now, so a time that already passed today does not fire at once.
   if (schedTimes().join() !== oldSched) { lastAutoRun = Date.now(); store.save('lastAutoRun', lastAutoRun); }
   renderSchedInfo(); updateWakeLock();
   store.save('settings', settings); TTS.configure(settings);
   if (settings.clientId) YT.preloadSignIn();
-  fillSettings(); renderTtsUsage(); renderFeed(); toast('保存しました');
+  fillSettings(); toast('保存しました');
 });
 $('#btn-voice-test').addEventListener('click', () => {
-  TTS.configure({ rate: +form.rate.value, voiceURI: form.voiceURI.value });
+  TTS.configure({ rate: +form.rate.value, voiceURI: form.voiceURI.value, ignoreSilent: form.ignoreSilent.checked });
   TTS.play([{ label: 'テスト', text: 'この速さと声で、動画の要約を読み上げます。' }]);
 });
 $('#btn-models').addEventListener('click', async () => {
@@ -819,5 +683,4 @@ showView(settings.geminiKey ? startView : 'settings');
 if (settings.clientId) YT.preloadSignIn();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 updateWakeLock();
-renderTtsUsage();
 checkSchedule(); // a time that passed while the app was closed runs now

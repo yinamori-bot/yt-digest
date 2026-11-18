@@ -52,7 +52,6 @@
       </details>
       <p id="sched-info" class="muted small" hidden></p>
       <p id="progress" class="muted" aria-live="polite"></p>
-      <p id="audio-progress" class="muted small" hidden></p>
       <div id="videos"></div>
     </section>
 
@@ -125,34 +124,17 @@
         <label>予約時刻3 <input name="sched3" type="time"></label>
         <label class="check"><input name="keepAwake" type="checkbox"> 予約を待っている間と要約中は、画面を自動で消さない</label>
 
-        <h2>音声ファイル（消音モードでも聞ける）</h2>
-        <p class="muted small">要約をGeminiで音声ファイルにして、このiPhoneに保存します。音楽と同じように再生されるので、消音モードでも、画面を消しても聞けます。作るときに1分あたり約4MBの通信を使うので、家のWi-Fiで要約するのがおすすめです（保存後は通信なしで聞けます）。音声ファイルが無いときや、無料枠を使い切ったときは、iPhoneの声で読み上げます。</p>
-        <label>音声ファイルを作る
-          <select name="audioMode">
-            <option value="off">作らない（iPhoneの声で読む）</option>
-            <option value="sum">要約だけ（1本につき1回）</option>
-            <option value="all">要約と、各話題の詳しい内容（1本につき4〜6回）</option>
-          </select></label>
-        <label class="check"><input name="audioDeep" type="checkbox"> 「さらに詳しく」や質問の回答も音声ファイルにする</label>
-        <label>声（音声ファイル） <select name="ttsVoice" id="tts-voice"></select></label>
-        <label>1日に作れる回数（AI Studioの上限画面のTTSモデルの「RPD」） <input name="ttsRpd" type="number" min="1" max="10000"></label>
-        <label>1分に作れる回数（同じく「RPM」） <input name="ttsRpm" type="number" min="1" max="1000"></label>
-        <label>音声モデル（空欄なら自動で選びます） <input name="ttsModel" placeholder="自動" autocomplete="off"></label>
-        <p id="tts-usage" class="muted small"></p>
-        <button type="button" id="btn-tts-test">音声ファイルで試しに聞く（1回分使います）</button>
-
         <h2>読み上げ</h2>
-        <label>iPhoneの声 <select name="voiceURI" id="voice"></select></label>
-        <label>速さ（音声ファイルにも使います） <span id="rate-val"></span><input name="rate" type="range" min="0.6" max="2" step="0.1"></label>
-        <button type="button" id="btn-voice-test">iPhoneの声で試しに聞く</button>
+        <label>声 <select name="voiceURI" id="voice"></select></label>
+        <label>速さ <span id="rate-val"></span><input name="rate" type="range" min="0.6" max="2" step="0.1"></label>
+        <label class="check"><input name="ignoreSilent" type="checkbox"> 消音モード（マナーモード）でも読み上げる</label>
+        <button type="button" id="btn-voice-test">試しに聞く</button>
 
         <div class="actions"><button class="primary" type="submit">保存</button></div>
       </form>
       <div class="card">
         <h2>データ</h2>
-        <p class="muted">データはこのiPhoneのブラウザの中だけに保存されます（APIキーと音声ファイルはバックアップに含まれません）。</p>
-        <p id="audio-size" class="muted small"></p>
-        <div class="actions"><button id="btn-audio-clear">保存した音声ファイルをすべて削除</button></div>
+        <p class="muted">データはこのiPhoneのブラウザの中だけに保存されます（APIキーはバックアップに含まれません）。</p>
         <div class="actions">
           <button id="btn-export">バックアップを保存</button>
           <label class="button">復元<input id="import-file" type="file" accept="application/json,.json" hidden></label>
