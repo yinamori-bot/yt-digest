@@ -623,7 +623,6 @@ form.addEventListener('submit', e => {
     days: n('days', 1, 30), perChannel: n('perChannel', 1, 20), skipShorts: form.skipShorts.checked,
     fps: +form.fps.value, knownLimit: n('knownLimit', 50, 5000), rate: +form.rate.value, voiceURI: form.voiceURI.value,
     sched1: form.sched1.value, sched2: form.sched2.value, sched3: form.sched3.value, keepAwake: form.keepAwake.checked,
-    ignoreSilent: form.ignoreSilent.checked,
   });
   // New schedule: start counting from now, so a time that already passed today does not fire at once.
   if (schedTimes().join() !== oldSched) { lastAutoRun = Date.now(); store.save('lastAutoRun', lastAutoRun); }
@@ -633,7 +632,7 @@ form.addEventListener('submit', e => {
   fillSettings(); toast('保存しました');
 });
 $('#btn-voice-test').addEventListener('click', () => {
-  TTS.configure({ rate: +form.rate.value, voiceURI: form.voiceURI.value, ignoreSilent: form.ignoreSilent.checked });
+  TTS.configure({ rate: +form.rate.value, voiceURI: form.voiceURI.value });
   TTS.play([{ label: 'テスト', text: 'この速さと声で、動画の要約を読み上げます。' }]);
 });
 $('#btn-models').addEventListener('click', async () => {
